@@ -5,13 +5,14 @@ touchpad on/off key, but for the keyboard.
 
 Windows 10/11 · single 50 KB exe · no install · no admin rights
 
-![Keyboard locked box](docs/locked.png)
+![Keyboard locked pill](docs/locked.png)
 
 ## Features
 - **Ctrl+Alt+K** locks and unlocks. You can change it to any key or combination, such as a laptop's macro key.
 - While locked, **every** key is blocked: letters, F1–F12, volume/media keys, the Windows key, Alt+Tab, and keys typed by software.
 - Brightness keys are handled by the laptop's firmware and can't be blocked, so any brightness change is undone while locked.
-- Padlock tray icon: click it to lock or unlock with the mouse. A "Keyboard locked" box shows on screen while locked.
+- A "Keyboard locked" pill springs open at the top of the screen, Dynamic Island style. When you unlock, it turns green, then shrinks away.
+- Padlock tray icon: click it to lock or unlock with the mouse.
 - Starts as soon as you sign in to Windows, using a Task Scheduler task. No admin rights needed.
 - Command line options `--toggle`, `--lock`, `--unlock`, `--exit`, so a vendor macro key or any launcher can control it.
 
@@ -23,7 +24,7 @@ Or [build it yourself](#build-from-source). It needs .NET Framework 4.x, which i
 
 ## Safety
 - **Ctrl+Alt+Del always works.** Windows doesn't let any app block it.
-- The mouse or touchpad can always unlock: click the tray icon, or double-click the "Keyboard locked" box.
+- The mouse or touchpad can always unlock: click the tray icon, or double-click the "Keyboard locked" pill.
 - It always starts unlocked, and it unlocks itself whenever Windows is locked or you sign in again.
 - It changes nothing on your PC: no drivers and no device changes. Exiting the app, or the app crashing, gives the keyboard back instantly.
 - A key-up is only blocked if its key-down was blocked, so no key ever gets stuck.
