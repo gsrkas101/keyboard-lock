@@ -5,7 +5,7 @@
 //  * Only a user-mode low-level keyboard hook. No drivers, no device changes, nothing
 //    persistent: exiting the app (or the app crashing) gives the keyboard back instantly.
 //  * Ctrl+Alt+Del can never be blocked by a hook, so there is always a way out.
-//  * The mouse/touchpad can always unlock (tray icon, or double-click the on-screen box).
+//  * The mouse/touchpad can always unlock (tray icon, or double-click the on-screen pill).
 //  * Always starts unlocked, and unlocks itself whenever Windows is locked or signed in to.
 //  * A key-up is only blocked if its key-down was blocked, so no key ever gets "stuck".
 //  * Any error inside the hook lets the key through (fails open, never fails locked).
@@ -32,8 +32,8 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Keyboard Lock")]
 [assembly: System.Reflection.AssemblyProduct("Keyboard Lock")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.2.0.0")]
 
 namespace KeyboardLock
 {
@@ -113,9 +113,6 @@ namespace KeyboardLock
         public const int WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101, WM_SYSKEYDOWN = 0x0104, WM_SYSKEYUP = 0x0105;
         public const uint WM_QUIT = 0x0012;
         public const uint LLKHF_EXTENDED = 0x01, LLKHF_INJECTED = 0x10;
-        public const int WS_EX_TOPMOST = 0x08, WS_EX_TOOLWINDOW = 0x80, WS_EX_LAYERED = 0x80000, WS_EX_NOACTIVATE = 0x08000000;
-        const int ULW_ALPHA = 2;
-        const byte AC_SRC_ALPHA = 1;
 
         [StructLayout(LayoutKind.Sequential)]
         public struct KBDLLHOOKSTRUCT { public uint vkCode, scanCode, flags, time; public IntPtr dwExtraInfo; }
@@ -143,54 +140,6 @@ namespace KeyboardLock
         public static extern uint GetCurrentThreadId();
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         public static extern IntPtr GetModuleHandle(string moduleName);
-        [StructLayout(LayoutKind.Sequential)]
-        struct POINT { public int x, y; }
-
-        [StructLayout(LayoutKind.Sequential)]
-        struct SIZE { public int cx, cy; }
-
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        struct BLENDFUNCTION { public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; }
-
-        [DllImport("user32.dll")]
-        static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize,
-            IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
-        [DllImport("user32.dll")]
-        static extern IntPtr GetDC(IntPtr hwnd);
-        [DllImport("user32.dll")]
-        static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
-        [DllImport("gdi32.dll")]
-        static extern IntPtr CreateCompatibleDC(IntPtr hdc);
-        [DllImport("gdi32.dll")]
-        static extern bool DeleteDC(IntPtr hdc);
-        [DllImport("gdi32.dll")]
-        static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
-        [DllImport("gdi32.dll")]
-        static extern bool DeleteObject(IntPtr obj);
-
-        // Shows a 32-bit ARGB bitmap as the content of a WS_EX_LAYERED window, with per-pixel alpha.
-        public static void SetLayeredBitmap(IntPtr hwnd, Bitmap bmp, int x, int y, byte opacity)
-        {
-            IntPtr screen = GetDC(IntPtr.Zero);
-            IntPtr memory = CreateCompatibleDC(screen);
-            IntPtr hbitmap = bmp.GetHbitmap(Color.FromArgb(0));
-            IntPtr old = SelectObject(memory, hbitmap);
-            try
-            {
-                var dst = new POINT { x = x, y = y };
-                var src = new POINT();
-                var size = new SIZE { cx = bmp.Width, cy = bmp.Height };
-                var blend = new BLENDFUNCTION { SourceConstantAlpha = opacity, AlphaFormat = AC_SRC_ALPHA };
-                UpdateLayeredWindow(hwnd, screen, ref dst, ref size, memory, ref src, 0, ref blend, ULW_ALPHA);
-            }
-            finally
-            {
-                SelectObject(memory, old);
-                DeleteObject(hbitmap);
-                DeleteDC(memory);
-                ReleaseDC(IntPtr.Zero, screen);
-            }
-        }
     }
 
     // The lock/unlock key, optionally with modifiers (e.g. Ctrl+Alt+K).
@@ -260,6 +209,7 @@ namespace KeyboardLock
     {
         public HotKey Toggle = HotKey.Default;
         public bool ShowOverlay = true;
+        public Point? PillPosition;   // null = top centre of the main screen
 
         public static string FilePath
         {
@@ -306,6 +256,8 @@ namespace KeyboardLock
                 if ((vk != 0 && vk != 0xFF) || scan > 0) s.Toggle = new HotKey(vk, scan, ext != 0, mods);
             }
             if (values.TryGetValue("ShowOverlay", out flag)) s.ShowOverlay = flag != 0;
+            int px, py;
+            if (values.TryGetValue("PillX", out px) && values.TryGetValue("PillY", out py)) s.PillPosition = new Point(px, py);
             return s;
         }
 
@@ -320,6 +272,11 @@ namespace KeyboardLock
                 lines.Add("ToggleModifiers=" + Toggle.Mods);
             }
             lines.Add("ShowOverlay=" + (ShowOverlay ? 1 : 0));
+            if (PillPosition.HasValue)
+            {
+                lines.Add("PillX=" + PillPosition.Value.X);
+                lines.Add("PillY=" + PillPosition.Value.Y);
+            }
             return lines.ToArray();
         }
     }
@@ -683,7 +640,7 @@ namespace KeyboardLock
         readonly KeyboardHook hook;
         readonly BrightnessGuard brightness = new BrightnessGuard();
         readonly NotifyIcon tray;
-        readonly IslandForm island;
+        readonly PillForm island;
         readonly OwnedIcon unlockedIcon, lockedIcon;
         readonly ToolStripMenuItem miToggle, miKey, miOverlay, miStartup;
         readonly ManualResetEvent stopIpc = new ManualResetEvent(false);
@@ -699,8 +656,14 @@ namespace KeyboardLock
             unlockedIcon = Icons.Make(UnlockedColor, false, iconSize);
             lockedIcon = Icons.Make(LockedColor, true, iconSize);
 
-            island = new IslandForm();
+            island = new PillForm("Keyboard Lock - keyboard locked", null, Icons.DrawPadlock, 20, LockedColor, UnlockedColor);
+            island.Position = settings.PillPosition;
             island.UnlockRequested += (s, e) => SetLocked(false);
+            island.PositionChanged += (s, e) =>
+            {
+                settings.PillPosition = island.Position;
+                SaveSettings();
+            };
             GC.KeepAlive(island.Handle);   // create the window now, so the first lock animates instantly
 
             filter.Toggle = settings.Toggle;
@@ -724,6 +687,7 @@ namespace KeyboardLock
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(miKey);
             menu.Items.Add(miOverlay);
+            menu.Items.Add(new ToolStripMenuItem("Move the pill back to the top", null, (s, e) => island.ResetPosition()));
             menu.Items.Add(miStartup);
             menu.Items.Add(new ToolStripMenuItem("Copy command for Xiaomi key", null, (s, e) => CopyCommand()));
             menu.Items.Add(new ToolStripSeparator());
@@ -834,9 +798,9 @@ namespace KeyboardLock
             miOverlay.Checked = settings.ShowOverlay;
 
             if (locked && settings.ShowOverlay)
-                island.ShowLocked(key != null ? key + " to unlock" : "Double-click to unlock");
+                island.ShowLocked("Keyboard locked", "Double-click to unlock" + (key != null ? ", or " + key : ""));
             else if (!locked && island.IsShowingLocked)
-                island.ShowUnlocked();
+                island.ShowUnlocked("Keyboard unlocked");
             else if (!settings.ShowOverlay)
                 island.Collapse();
 
@@ -978,7 +942,10 @@ namespace KeyboardLock
                 "HOW TO USE\n" +
                 "•  Press " + key + " to lock, and again to unlock.\n" +
                 "•  Or click the padlock icon in the taskbar tray.\n" +
-                "•  While locked, double-click the \"Keyboard locked\" pill at the top of the screen to unlock with the mouse.\n\n" +
+                "•  While locked, double-click the \"Keyboard locked\" pill to unlock with the mouse.\n\n" +
+                "THE PILL\n" +
+                "•  It shrinks to a small padlock so it doesn't distract you. Point at it to see the full text.\n" +
+                "•  Drag it anywhere you like; it remembers the place. \"Move the pill back to the top\" in the menu resets it.\n\n" +
                 "ALWAYS-WORKING WAYS OUT\n" +
                 "•  Ctrl+Alt+Del can't be blocked. Use it to lock Windows or open Task Manager.\n" +
                 "•  Locking Windows or signing in again unlocks the keyboard automatically.\n" +
@@ -1011,236 +978,6 @@ namespace KeyboardLock
             unlockedIcon.Dispose();
             lockedIcon.Dispose();
             ExitThread();
-        }
-    }
-
-    // Black pill at the top-centre of the screen, in the style of a Dynamic Island: springs open
-    // when the keyboard locks, briefly turns into "Keyboard unlocked" when it unlocks, then
-    // shrinks away. A per-pixel-alpha layered window, so the pill has smooth edges. Never takes focus.
-    sealed class IslandForm : Form
-    {
-        const int ExpandMs = 480, MorphMs = 360, CollapseMs = 240, UnlockedHoldMs = 1300;
-
-        readonly float scale;
-        readonly Font titleFont, hintFont;
-        readonly System.Windows.Forms.Timer frame = new System.Windows.Forms.Timer { Interval = 15 };
-        readonly System.Windows.Forms.Timer hold = new System.Windows.Forms.Timer { Interval = UnlockedHoldMs };
-        readonly Stopwatch clock = new Stopwatch();
-
-        string title = "", hint = "";
-        float titleWidth, hintWidth;
-        Color iconColor;
-        bool iconClosed, showingLocked, collapsing;
-        float width, fromWidth, toWidth, alpha, fromAlpha, toAlpha, contentAlpha;
-        int durationMs;
-
-        public event EventHandler UnlockRequested;
-
-        public IslandForm()
-        {
-            Text = "Keyboard Lock - keyboard locked";
-            FormBorderStyle = FormBorderStyle.None;
-            ShowInTaskbar = false;
-            TopMost = true;
-            StartPosition = FormStartPosition.Manual;
-            Cursor = Cursors.Hand;
-            using (Graphics g = Graphics.FromHwnd(IntPtr.Zero)) scale = g.DpiX / 96f;
-            titleFont = new Font("Segoe UI Semibold", 14f * scale, GraphicsUnit.Pixel);
-            hintFont = new Font("Segoe UI", 12.5f * scale, GraphicsUnit.Pixel);
-            frame.Tick += (s, e) => Step();
-            hold.Tick += (s, e) => Collapse();
-        }
-
-        float S(float v) { return v * scale; }
-        float PillHeight { get { return S(40); } }
-
-        protected override bool ShowWithoutActivation { get { return true; } }
-
-        protected override CreateParams CreateParams
-        {
-            get
-            {
-                CreateParams cp = base.CreateParams;
-                cp.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE | Native.WS_EX_TOPMOST;
-                return cp;
-            }
-        }
-
-        public void ShowLocked(string hintText)
-        {
-            hold.Stop();
-            if (showingLocked && !collapsing && Visible && hint == hintText) return;
-            showingLocked = true;
-            SetContent("Keyboard locked", hintText, TrayApp.LockedColor, true);
-            AnimateTo(ContentWidth(), 1f, Visible && !collapsing ? MorphMs : ExpandMs);
-        }
-
-        // Only when the pill is on screen: morph to "Keyboard unlocked", then shrink away.
-        public void ShowUnlocked()
-        {
-            showingLocked = false;
-            if (!Visible || collapsing) return;
-            SetContent("Keyboard unlocked", "", TrayApp.UnlockedColor, false);
-            AnimateTo(ContentWidth(), 1f, MorphMs);
-            hold.Stop();
-            hold.Start();
-        }
-
-        public void Collapse()
-        {
-            hold.Stop();
-            showingLocked = false;
-            if (!Visible || collapsing) return;
-            AnimateTo(PillHeight, 0f, CollapseMs);
-        }
-
-        public bool IsShowingLocked { get { return showingLocked && Visible && !collapsing; } }
-
-        void SetContent(string newTitle, string newHint, Color color, bool closed)
-        {
-            title = newTitle;
-            hint = newHint;
-            iconColor = color;
-            iconClosed = closed;
-            using (Graphics g = Graphics.FromHwnd(IntPtr.Zero))
-            {
-                titleWidth = g.MeasureString(title, titleFont, PointF.Empty, StringFormat.GenericTypographic).Width;
-                hintWidth = hint.Length == 0 ? 0 : g.MeasureString(hint, hintFont, PointF.Empty, StringFormat.GenericTypographic).Width;
-            }
-        }
-
-        float ContentWidth()
-        {
-            return S(44) + titleWidth + (hintWidth > 0 ? S(12) + hintWidth : 0) + S(20);
-        }
-
-        void AnimateTo(float targetWidth, float targetAlpha, int ms)
-        {
-            if (!Visible)
-            {
-                width = PillHeight;   // start as a small dot, like the island growing out of nothing
-                alpha = 0;
-            }
-            fromWidth = width;
-            fromAlpha = alpha;
-            toWidth = targetWidth;
-            toAlpha = targetAlpha;
-            durationMs = ms;
-            collapsing = targetAlpha <= 0;
-            contentAlpha = 0;
-            clock.Restart();
-            if (!Visible)
-            {
-                Bounds = PillBounds();
-                Render();
-                Show();
-            }
-            frame.Start();
-        }
-
-        void Step()
-        {
-            float t = Math.Min(1f, (float)clock.Elapsed.TotalMilliseconds / durationMs);
-            if (collapsing)
-            {
-                width = fromWidth + (toWidth - fromWidth) * t * t * t;
-                alpha = fromAlpha + (toAlpha - fromAlpha) * t;
-                contentAlpha = Math.Max(0f, 1f - t * 3f);
-            }
-            else
-            {
-                width = Math.Max(PillHeight, fromWidth + (toWidth - fromWidth) * EaseOutBack(t));
-                alpha = fromAlpha + (toAlpha - fromAlpha) * Math.Min(1f, t * 3f);
-                contentAlpha = Math.Max(0f, Math.Min(1f, (t - 0.2f) / 0.5f));
-            }
-            Render();
-            if (t < 1f) return;
-            frame.Stop();
-            if (collapsing)
-            {
-                collapsing = false;
-                Hide();
-            }
-        }
-
-        // Slight overshoot, so the pill springs open.
-        static float EaseOutBack(float t)
-        {
-            const float c1 = 1.2f, c3 = c1 + 1f;
-            float u = t - 1f;
-            return 1f + c3 * u * u * u + c1 * u * u;
-        }
-
-        Rectangle PillBounds()
-        {
-            int w = (int)Math.Ceiling(width), h = (int)Math.Ceiling(PillHeight);
-            Rectangle area = Screen.PrimaryScreen.WorkingArea;
-            return new Rectangle(area.Left + (area.Width - w) / 2, area.Top + (int)S(10), w, h);
-        }
-
-        void Render()
-        {
-            Rectangle bounds = PillBounds();
-            using (var bmp = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb))
-            {
-                using (Graphics g = Graphics.FromImage(bmp))
-                using (GraphicsPath pill = Pill(new RectangleF(0, 0, width, PillHeight)))
-                {
-                    g.SmoothingMode = SmoothingMode.AntiAlias;
-                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                    g.FillPath(Brushes.Black, pill);
-                    g.SetClip(pill);   // content is revealed as the pill grows
-                    int a = (int)(contentAlpha * 255);
-                    if (a > 0)
-                    {
-                        float icon = S(20);
-                        Icons.DrawPadlock(g, new RectangleF(S(15), (PillHeight - icon) / 2, icon, icon),
-                            Color.FromArgb(a, iconColor), iconClosed);
-                        float x = S(44);
-                        using (var brush = new SolidBrush(Color.FromArgb(a, Color.White)))
-                            g.DrawString(title, titleFont, brush, x, TextTop(titleFont), StringFormat.GenericTypographic);
-                        if (hint.Length > 0)
-                            using (var brush = new SolidBrush(Color.FromArgb(a, 150, 150, 158)))
-                                g.DrawString(hint, hintFont, brush, x + titleWidth + S(12), TextTop(hintFont),
-                                    StringFormat.GenericTypographic);
-                    }
-                }
-                Native.SetLayeredBitmap(Handle, bmp, bounds.X, bounds.Y, (byte)(Math.Max(0f, Math.Min(1f, alpha)) * 255));
-            }
-        }
-
-        float TextTop(Font font)
-        {
-            return (PillHeight - font.Size * 1.33f) / 2f;   // Segoe UI line height is about 1.33 em
-        }
-
-        static GraphicsPath Pill(RectangleF r)
-        {
-            float d = r.Height;
-            var path = new GraphicsPath();
-            path.AddArc(r.X, r.Y, d, d, 90, 180);
-            path.AddArc(r.Right - d, r.Y, d, d, 270, 180);
-            path.CloseFigure();
-            return path;
-        }
-
-        protected override void OnMouseDoubleClick(MouseEventArgs e)
-        {
-            base.OnMouseDoubleClick(e);
-            if (UnlockRequested != null) UnlockRequested(this, EventArgs.Empty);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                frame.Dispose();
-                hold.Dispose();
-                titleFont.Dispose();
-                hintFont.Dispose();
-            }
-            base.Dispose(disposing);
         }
     }
 

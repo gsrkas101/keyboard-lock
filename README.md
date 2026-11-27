@@ -12,6 +12,8 @@ Windows 10/11 · single 50 KB exe · no install · no admin rights
 - While locked, **every** key is blocked: letters, F1–F12, volume/media keys, the Windows key, Alt+Tab, and keys typed by software.
 - Brightness keys are handled by the laptop's firmware and can't be blocked, so any brightness change is undone while locked.
 - A "Keyboard locked" pill springs open at the top of the screen, Dynamic Island style. When you unlock, it turns green, then shrinks away.
+- So it doesn't distract you while you work, the pill shrinks to a small padlock after a moment. Point at it to see the full text.
+- Drag the pill anywhere on the screen. It remembers the place; **Move the pill back to the top** in the menu resets it.
 - Padlock tray icon: click it to lock or unlock with the mouse.
 - Starts as soon as you sign in to Windows, using a Task Scheduler task. No admin rights needed.
 - Command line options `--toggle`, `--lock`, `--unlock`, `--exit`, so a vendor macro key or any launcher can control it.

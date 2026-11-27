@@ -116,6 +116,12 @@ namespace KeyboardLock
             Settings back = Settings.Parse(s.ToLines());
             Check(back.Toggle != null && back.Toggle.Vk == OEM && back.Toggle.Scan == 0x6E && back.Toggle.Extended
                   && back.Toggle.Mods == HotKey.Win && !back.ShowOverlay, "settings round trip");
+            var placed = new Settings { PillPosition = new System.Drawing.Point(-1200, 340) };
+            Settings placedBack = Settings.Parse(placed.ToLines());
+            Check(placedBack.PillPosition.HasValue && placedBack.PillPosition.Value.X == -1200 && placedBack.PillPosition.Value.Y == 340,
+                "settings: pill position round trip");
+            Check(!Settings.Parse(new[] { "PillX=5" }).PillPosition.HasValue && !Settings.Parse(new string[0]).PillPosition.HasValue,
+                "settings: no pill position = default place");
             Check(Settings.Parse(new[] { "ToggleVk=999", "junk" }).Toggle == HotKey.Default, "settings: invalid key falls back to Ctrl+Alt+K");
             Check(Settings.Parse(new string[0]).Toggle.ToString() == "Ctrl+Alt+K", "settings: default key is Ctrl+Alt+K");
             Check(new HotKey(A, 0x1E, false, 0).IsTypingKey && !new HotKey(F24, 0x76, false, 0).IsTypingKey,
